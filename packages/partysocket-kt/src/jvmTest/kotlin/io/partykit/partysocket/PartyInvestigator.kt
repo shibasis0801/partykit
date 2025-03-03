@@ -22,6 +22,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.internal.sse.ServerSentEventReader.Companion.options
+import org.junit.After
+import org.junit.Before
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.time.Duration.Companion.seconds
@@ -31,25 +34,19 @@ val httpClient = HttpClient(OkHttp) {
     install(HttpTimeout)
 }
 
-class PartyInvestigator {
-    @Test
-    fun workingNetwork() {
-        val response = runBlocking {
-            httpClient.get("https://docs.partykit.io/reference/partysocket-api/")
-        }
-        assertEquals(response.status, HttpStatusCode.OK)
-    }
+fun createPartySocket() = PartySocket(httpClient, PartySocketOptions("chat.shibasis.dev", "my-new-room"))
 
+class PartyInvestigator {
     @Test
     fun partyUrl() {
         val url = generatePartyUrl("https://chat.shibasis.dev", "my-new-room")
         println("PartyKit URL: $url")
-        assert(url.length > 0)
+        assert(url.isNotEmpty())
     }
 
     @Test
     fun testSocket() = runBlocking {
-        val partySocket = PartySocket(httpClient, "chat.shibasis.dev", "my-new-room")
+        val partySocket = createPartySocket()
         val receivedMessages = mutableListOf<String>()
         withTimeoutOrNull(5.seconds) {
             partySocket.frames.collect {
@@ -60,5 +57,24 @@ class PartyInvestigator {
         println("Received: $receivedMessages")
         assert(receivedMessages.isNotEmpty()) { "No messages received within the timeout." }
         assert(receivedMessages.firstOrNull()?.contains("You are now connected") ?: false) { "Connection Successful" }
+    }
+
+    @Test
+    fun testEcho() = runBlocking {
+        val partySocket = createPartySocket()
+        val receivedMessages = mutableListOf<String>()
+        val message = "Shibasis is testing echo"
+        withTimeoutOrNull(10.seconds) {
+            launch {
+                partySocket.frames.collect {
+                    receivedMessages.add((it as? Frame.Text)?.readText() ?: "")
+                }
+            }
+            partySocket.send(Frame.Text(message))
+        }
+
+        println("Received: $receivedMessages")
+        assert(receivedMessages.isNotEmpty()) { "No messages received within the timeout." }
+        assert(receivedMessages.find { it.contains(message) } != null) { "Echo Unsuccessful" }
     }
 }

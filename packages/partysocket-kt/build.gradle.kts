@@ -30,7 +30,7 @@ kotlin {
             implementation("io.ktor:ktor-client-core:3.1.1")
             implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.0")
             implementation("org.jetbrains.kotlinx:kotlinx-serialization-core:1.8.0")
-            implementation("co.touchlab:kermit:2.0.4")
+//            implementation("co.touchlab:kermit:2.0.4")
 
         }
         jvmTest.dependencies {

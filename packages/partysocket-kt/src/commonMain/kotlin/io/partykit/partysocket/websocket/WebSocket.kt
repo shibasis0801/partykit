@@ -1,54 +1,66 @@
-package io.partykit.partysocket
+package io.partykit.partysocket.websocket
 
-import co.touchlab.kermit.Logger
-import io.ktor.client.*
-import io.ktor.client.network.sockets.SocketTimeoutException
-import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
+import io.ktor.client.HttpClient
 import io.ktor.client.plugins.websocket.webSocket
-import io.ktor.client.plugins.websocket.webSocketSession
-import io.ktor.client.utils.EmptyContent.status
-import io.ktor.http.HttpMethod
 import io.ktor.websocket.CloseReason
 import io.ktor.websocket.Frame
 import io.ktor.websocket.close
-import io.ktor.websocket.readText
-import io.partykit.partysocket.util.generatePartyUrl
+import io.ktor.websocket.send
 import kotlinx.atomicfu.atomic
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.ReceiveChannel
-import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.channels.consumeEach
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
+import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
-/*
-Take care of closing properly
- */
+typealias Logger = (error: Throwable?, message: String) -> Unit
+typealias UrlProvider = suspend () -> String
+
+enum class Status {
+    CONNECTING,
+    OPEN,
+    CLOSING,
+    CLOSED
+}
+
+data class WebSocketOptions(
+    val minReconnectionDelay: Duration = (1 + Random.nextInt(0, 4)).seconds,
+    val maxReconnectionDelay: Duration = 10.seconds,
+    val reconnectionDelayGrowFactor: Double = 1.3,
+    val minUptime: Duration = 5.seconds,
+    val connectionTimeout: Duration = 4.seconds,
+    val maxRetries: Int = Int.MAX_VALUE,
+    val maxEnqueuedMessages: Int = Int.MAX_VALUE,
+    val startClosed: Boolean = false,
+    val debug: Boolean = false,
+    val logger: Logger = { _, _ -> }
+)
+
+
 open class WebSocket(
     val httpClient: HttpClient,
-    val url: String,
-    val timeout: Duration = 10.seconds,
+    protected var options: WebSocketOptions = WebSocketOptions(),
+    protected var urlProvider: UrlProvider,
+    protected var reconnectionStrategy: ReconnectionStrategy = ExponentialBackoffStrategy(options),
     dispatcher: CoroutineDispatcher = Dispatchers.Default,
-    channelCapacity: Int = Channel.UNLIMITED,
 ) {
     val scope = CoroutineScope(dispatcher + SupervisorJob())
-
-    enum class Status {
-        CONNECTING,
-        OPEN,
-        CLOSING,
-        CLOSED
-    }
-
     private val status = atomic(Status.CLOSED)
-    var connectionStatus: Status by status
+    val connectionStatus: Status by status
+
     val frames = MutableSharedFlow<Frame>()
+
     private val closeChannel = Channel<CloseReason>(Channel.RENDEZVOUS)
-    private val sendChannel = Channel<Frame>(channelCapacity)
+    private val sendChannel = Channel<Frame>(options.maxEnqueuedMessages)
 
     init {
         scope.launch { open() }
@@ -57,7 +69,8 @@ open class WebSocket(
     suspend fun open() = suspendCancellableCoroutine { continuation ->
         status.value = Status.CONNECTING
         scope.launch {
-            val timedOut = withTimeoutOrNull(timeout) {
+            val url = urlProvider()
+            val timedOut = withTimeoutOrNull(options.connectionTimeout) {
                 httpClient.webSocket(url) {
                     try {
                         status.value = Status.OPEN
@@ -95,12 +108,4 @@ open class WebSocket(
             closeChannel.close()
         }
     }
-}
-
-open class PartySocket(
-    httpClient: HttpClient,
-    host: String,
-    room: String
-): WebSocket(httpClient, generatePartyUrl(host, room)) {
-
 }
