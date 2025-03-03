@@ -11,6 +11,7 @@ import io.ktor.websocket.CloseReason
 import io.ktor.websocket.Frame
 import io.ktor.websocket.close
 import io.ktor.websocket.readText
+import io.partykit.partysocket.util.generatePartyUrl
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.consumeAsFlow
@@ -20,6 +21,7 @@ import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.time.Duration.Companion.seconds
@@ -46,47 +48,17 @@ class PartyInvestigator {
     }
 
     @Test
-    fun openSocket() {
-        val url = generatePartyUrl("chat.shibasis.dev", "my-new-room")
+    fun testSocket() = runBlocking {
+        val partySocket = PartySocket(httpClient, "chat.shibasis.dev", "my-new-room")
         val receivedMessages = mutableListOf<String>()
-        val maxMessages = 5  // Or however many you want to quickly check
-        val timeoutDuration = 10.seconds // Timeout after 10 seconds
-        val sendMessages = false // flag for sending message
-
-        runBlocking {
-            val job = launch {
-                try {
-                    httpClient.webSocket(url) {
-                        println("Connected!")
-
-                        // Use a conflated flow to only process the *latest* incoming message.
-                        // conflate is deprecated for now, but it is a quick solution
-                        @OptIn(kotlinx.coroutines.FlowPreview::class)
-                        val incomingFlow = incoming.consumeAsFlow()
-                            .map { (it as? Frame.Text)?.readText() ?: "" }
-                            .conflate()
-
-
-                        // Collect messages, adding them to the list, until we hit our max.
-                        incomingFlow.take(maxMessages).collect { message ->
-                            println("Received: $message")
-                            receivedMessages.add(message)
-                        }
-                        println("Closing connection after receiving $maxMessages messages.")
-                        close(CloseReason(CloseReason.Codes.NORMAL, "Collected enough messages"))
-                    }
-                } catch (e: Exception) {
-                    println("Error: $e")
-                }
+        withTimeoutOrNull(5.seconds) {
+            partySocket.frames.collect {
+                receivedMessages.add((it as? Frame.Text)?.readText() ?: "")
             }
-
-            // Add a timeout to the whole operation.
-            withTimeout(timeoutDuration) {
-                job.join()
-            }
-
-            // Assert that we received *some* messages (optional, but good for testing)
-            assert(receivedMessages.isNotEmpty()) { "No messages received within the timeout." }
         }
+
+        println("Received: $receivedMessages")
+        assert(receivedMessages.isNotEmpty()) { "No messages received within the timeout." }
+        assert(receivedMessages.firstOrNull()?.contains("You are now connected") ?: false) { "Connection Successful" }
     }
 }
