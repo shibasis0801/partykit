@@ -11,18 +11,24 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
-typealias Logger = (error: Throwable?, message: String) -> Unit
+interface Logger {
+    operator fun invoke(message: String, error: Throwable? = null)
+}
+
 typealias UrlProvider = suspend () -> String
 
 enum class Status {
@@ -33,16 +39,12 @@ enum class Status {
 }
 
 data class WebSocketOptions(
-    val minReconnectionDelay: Duration = (1 + Random.nextInt(0, 4)).seconds,
-    val maxReconnectionDelay: Duration = 10.seconds,
-    val reconnectionDelayGrowFactor: Double = 1.3,
     val minUptime: Duration = 5.seconds,
     val connectionTimeout: Duration = 4.seconds,
-    val maxRetries: Int = Int.MAX_VALUE,
     val maxEnqueuedMessages: Int = Int.MAX_VALUE,
     val startClosed: Boolean = false,
     val debug: Boolean = false,
-    val logger: Logger = { _, _ -> }
+    val logger: Logger? = null
 )
 
 
@@ -50,7 +52,7 @@ open class WebSocket(
     val httpClient: HttpClient,
     protected var options: WebSocketOptions = WebSocketOptions(),
     protected var urlProvider: UrlProvider,
-    protected var reconnectionStrategy: ReconnectionStrategy = ExponentialBackoffStrategy(options),
+    protected var reconnectionStrategy: ReconnectionStrategy = ExponentialBackoffStrategy(),
     dispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) {
     val scope = CoroutineScope(dispatcher + SupervisorJob())
@@ -59,22 +61,30 @@ open class WebSocket(
 
     val frames = MutableSharedFlow<Frame>()
 
-    private val closeChannel = Channel<CloseReason>(Channel.RENDEZVOUS)
-    private val sendChannel = Channel<Frame>(options.maxEnqueuedMessages)
+    private var closeChannel = Channel<CloseReason>(Channel.RENDEZVOUS)
+    private var sendChannel = Channel<Frame>(options.maxEnqueuedMessages)
 
     init {
         scope.launch { open() }
     }
 
+    private fun tearDown() {
+        scope.cancel()
+        closeChannel.close()
+        sendChannel.close()
+    }
+
     suspend fun open() = suspendCancellableCoroutine { continuation ->
         status.value = Status.CONNECTING
         scope.launch {
-            val url = urlProvider()
-            val timedOut = withTimeoutOrNull(options.connectionTimeout) {
-                httpClient.webSocket(url) {
-                    try {
+            try {
+                withTimeout(options.connectionTimeout) {
+                    val url = urlProvider()
+                    httpClient.webSocket(url) {
                         status.value = Status.OPEN
-                        continuation.resume(true)
+                        if (continuation.isActive) {
+                            continuation.resume(true)
+                        }
                         launch {
                             incoming.consumeEach { frames.emit(it) }
                         }
@@ -85,16 +95,18 @@ open class WebSocket(
                             status.value = Status.CLOSED
                             close(reason)
                         }
-                    } catch (e: Throwable) {
-                        close(CloseReason(CloseReason.Codes.INTERNAL_ERROR, e.message ?: ""))
                     }
                 }
-            }
-            if (timedOut == null) {
+            } catch (e: Throwable) {
+                status.value = Status.CLOSED
+                if (reconnectionStrategy.shouldReconnect()) {
+                    // reconnect ?
+                }
                 if (continuation.isActive) {
                     continuation.resume(false)
                 }
             }
+
         }
     }
 

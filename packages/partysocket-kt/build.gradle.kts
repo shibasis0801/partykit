@@ -2,7 +2,7 @@ plugins {
     kotlin("multiplatform") version "2.1.10"
     kotlin("plugin.serialization") version "2.1.10"
     id("org.jetbrains.kotlinx.atomicfu") version "0.27.0"
-    id("com.android.library") version "8.4.0"
+    id("com.android.library") version "8.8.0"
 
 }
 
