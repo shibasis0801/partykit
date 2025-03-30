@@ -28,6 +28,7 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             implementation("io.ktor:ktor-client-core:3.1.1")
+            implementation("io.ktor:ktor-serialization-kotlinx-json:3.1.1")
             implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.0")
             implementation("org.jetbrains.kotlinx:kotlinx-serialization-core:1.8.0")
 //            implementation("co.touchlab:kermit:2.0.4")

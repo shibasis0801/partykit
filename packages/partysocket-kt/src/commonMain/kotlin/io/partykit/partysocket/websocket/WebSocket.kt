@@ -1,7 +1,11 @@
 package io.partykit.partysocket.websocket
 
 import io.ktor.client.HttpClient
+import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
+import io.ktor.client.plugins.websocket.receiveDeserialized
+import io.ktor.client.plugins.websocket.sendSerialized
 import io.ktor.client.plugins.websocket.webSocket
+import io.ktor.util.reflect.typeInfo
 import io.ktor.websocket.CloseReason
 import io.ktor.websocket.Frame
 import io.ktor.websocket.close
@@ -15,6 +19,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
@@ -60,9 +65,11 @@ open class WebSocket(
     val connectionStatus: Status by status
 
     val frames = MutableSharedFlow<Frame>()
+    val session = MutableStateFlow<DefaultClientWebSocketSession?>(null)
 
     private var closeChannel = Channel<CloseReason>(Channel.RENDEZVOUS)
     private var sendChannel = Channel<Frame>(options.maxEnqueuedMessages)
+
 
     init {
         scope.launch { open() }
@@ -81,10 +88,12 @@ open class WebSocket(
                 withTimeout(options.connectionTimeout) {
                     val url = urlProvider()
                     httpClient.webSocket(url) {
+                        session.value = this
                         status.value = Status.OPEN
                         if (continuation.isActive) {
                             continuation.resume(true)
                         }
+
                         launch {
                             incoming.consumeEach { frames.emit(it) }
                         }
@@ -92,6 +101,7 @@ open class WebSocket(
                             sendChannel.consumeEach { send(it) }
                         }
                         closeChannel.consumeEach { reason ->
+                            session.value = null
                             status.value = Status.CLOSED
                             close(reason)
                         }
@@ -121,3 +131,5 @@ open class WebSocket(
         }
     }
 }
+
+
