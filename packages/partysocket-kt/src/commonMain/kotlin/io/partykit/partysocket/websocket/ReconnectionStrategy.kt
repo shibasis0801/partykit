@@ -1,12 +1,13 @@
 package io.partykit.partysocket.websocket
 
+import io.ktor.websocket.CloseReason
 import kotlinx.coroutines.delay
 import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
 interface ReconnectionStrategy {
-    suspend fun shouldReconnect(): Boolean
+    suspend fun shouldReconnect(closeResult: Result<Unit>, closeReason: CloseReason? = null): Boolean
     suspend fun wait()
 }
 
@@ -19,7 +20,7 @@ class ExponentialBackoffStrategy(
     private var waitTime = minDelay
     private var retries = 0
 
-    override suspend fun shouldReconnect(): Boolean {
+    override suspend fun shouldReconnect(closeResult: Result<Unit>, closeReason: CloseReason?): Boolean {
         if (waitTime < maxDelay) {
             waitTime = (waitTime * growFactor)
                 .coerceAtMost(maxDelay)

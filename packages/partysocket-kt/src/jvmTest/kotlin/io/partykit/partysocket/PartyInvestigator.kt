@@ -4,36 +4,21 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.websocket.WebSockets
-import io.ktor.client.plugins.websocket.webSocket
-import io.ktor.client.request.get
-import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.KotlinxWebsocketSerializationConverter
-import io.ktor.websocket.CloseReason
 import io.ktor.websocket.Frame
-import io.ktor.websocket.close
 import io.ktor.websocket.readText
 import io.partykit.partysocket.util.generatePartyUrl
-import io.partykit.partysocket.websocket.onTextMessage
-import io.partykit.partysocket.websocket.sendText
-import io.partykit.partysocket.websocket.textFrames
-import kotlinx.coroutines.Dispatchers
+import io.partykit.partysocket.websocket.onTextFrame
+import io.partykit.partysocket.websocket.sendTextFrame
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.conflate
-import kotlinx.coroutines.flow.consumeAsFlow
-import kotlinx.coroutines.flow.filterNotNull
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import okhttp3.internal.sse.ServerSentEventReader.Companion.options
-import org.junit.After
-import org.junit.Before
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.time.Duration.Companion.seconds
 
 val httpClient = HttpClient(OkHttp) {
@@ -79,7 +64,7 @@ class PartyInvestigator {
                     receivedMessages.add((it as? Frame.Text)?.readText() ?: "")
                 }
             }
-            partySocket.send(Frame.Text(message))
+            partySocket.sendTextFrame(message)
         }
 
         println("Received: $receivedMessages")
@@ -101,26 +86,38 @@ class PartyInvestigator {
         val user2 = createPartySocket()
         val receivedMessages2 = mutableListOf<String>()
 
-        val message = "Shibasis is testing echo"
+        val user3 = createPartySocket()
+        val receivedMessages3 = mutableListOf<String>()
 
         withTimeoutOrNull(10.seconds) {
-            launch {
-                user1.onTextMessage {
-                    receivedMessages1.add(it)
-                }
-
+            val jobs = arrayListOf<Job>()
+            jobs += user1.onTextFrame {
+                receivedMessages1.add(it)
             }
-            user1.sendText("Hello from user1")
+            user1.sendTextFrame("Hello from user1")
+            user1.sendTextFrame("What's up")
+            user1.sendTextFrame("I am going now")
 
-            launch {
-                user2.onTextMessage {
-                    receivedMessages2.add(it)
-                }
+            jobs += user2.onTextFrame {
+                receivedMessages2.add(it)
             }
-            user2.sendText("Hello from user2")
+            user2.sendTextFrame("Hello from user2")
+            delay(1000)
+            user1.close()
+
+            user2.sendTextFrame("I am good")
+            jobs += user3.onTextFrame {
+                receivedMessages3.add(it)
+            }
+            user3.sendTextFrame("Hello from user3")
+
+            delay(4000)
+            jobs.joinAll()
         }
-        println("User1 Received: $receivedMessages1")
-        println("User2 Received: $receivedMessages2")
+        println("User1 Received: ${receivedMessages1.joinToString("\n")}\n")
+        println("User2 Received: ${receivedMessages2.joinToString("\n")}\n")
+        println("User3 Received: ${receivedMessages3.joinToString("\n")}\n")
+
         assert(true)
     }
 }

@@ -1,34 +1,27 @@
 package io.partykit.partysocket.websocket
 
 import io.ktor.client.HttpClient
+import io.ktor.client.plugins.timeout
 import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
-import io.ktor.client.plugins.websocket.receiveDeserialized
-import io.ktor.client.plugins.websocket.sendSerialized
-import io.ktor.client.plugins.websocket.webSocket
-import io.ktor.util.reflect.typeInfo
+import io.ktor.client.plugins.websocket.webSocketSession
 import io.ktor.websocket.CloseReason
 import io.ktor.websocket.Frame
-import io.ktor.websocket.close
-import io.ktor.websocket.send
-import kotlinx.atomicfu.atomic
+import io.ktor.websocket.Frame.Close
+import io.ktor.websocket.Frame.Text
+import io.ktor.websocket.readText
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withTimeout
-import kotlinx.coroutines.withTimeoutOrNull
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
-import kotlin.random.Random
-import kotlin.time.Duration
-import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 interface Logger {
     operator fun invoke(message: String, error: Throwable? = null)
@@ -37,21 +30,10 @@ interface Logger {
 typealias UrlProvider = suspend () -> String
 
 enum class Status {
-    CONNECTING,
     OPEN,
     CLOSING,
     CLOSED
 }
-
-data class WebSocketOptions(
-    val minUptime: Duration = 5.seconds,
-    val connectionTimeout: Duration = 4.seconds,
-    val maxEnqueuedMessages: Int = Int.MAX_VALUE,
-    val startClosed: Boolean = false,
-    val debug: Boolean = false,
-    val logger: Logger? = null
-)
-
 
 open class WebSocket(
     val httpClient: HttpClient,
@@ -61,75 +43,108 @@ open class WebSocket(
     dispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) {
     val scope = CoroutineScope(dispatcher + SupervisorJob())
-    private val status = atomic(Status.CLOSED)
-    val connectionStatus: Status by status
 
+    var status = Status.CLOSED
+        private set
     val frames = MutableSharedFlow<Frame>()
-    val session = MutableStateFlow<DefaultClientWebSocketSession?>(null)
 
-    private var closeChannel = Channel<CloseReason>(Channel.RENDEZVOUS)
-    private var sendChannel = Channel<Frame>(options.maxEnqueuedMessages)
-
+    // dont join with assignment, init is behaving weird
+    private val connectingMutex: Mutex
+    private val disconnectingMutex: Mutex
 
     init {
-        scope.launch { open() }
+        connectingMutex = Mutex()
+        disconnectingMutex = Mutex()
+        if (!options.startClosed) {
+            scope.launch {
+                connect()
+            }
+        }
     }
 
-    private fun tearDown() {
-        scope.cancel()
-        closeChannel.close()
-        sendChannel.close()
-    }
+    private var sessionDeferred = CompletableDeferred<DefaultClientWebSocketSession>()
+    suspend fun<T> withSession(fn: suspend DefaultClientWebSocketSession.() -> T) =
+        fn(sessionDeferred.await())
 
-    suspend fun open() = suspendCancellableCoroutine { continuation ->
-        status.value = Status.CONNECTING
-        scope.launch {
+
+    private var sendChannel = Channel<Frame>(options.maxEnqueuedMessages)
+
+    suspend fun connect(url: String? = null) {
+        connectingMutex.withLock {
+            if (status == Status.OPEN) return
+
+            sessionDeferred = CompletableDeferred()
             try {
-                withTimeout(options.connectionTimeout) {
-                    val url = urlProvider()
-                    httpClient.webSocket(url) {
-                        session.value = this
-                        status.value = Status.OPEN
-                        if (continuation.isActive) {
-                            continuation.resume(true)
-                        }
-
-                        launch {
-                            incoming.consumeEach { frames.emit(it) }
-                        }
-                        launch {
-                            sendChannel.consumeEach { send(it) }
-                        }
-                        closeChannel.consumeEach { reason ->
-                            session.value = null
-                            status.value = Status.CLOSED
-                            close(reason)
-                        }
+                val session = httpClient.webSocketSession(url ?: urlProvider()) {
+                    timeout {
+                        requestTimeoutMillis = options.connectionTimeout.inWholeMilliseconds
                     }
                 }
-            } catch (e: Throwable) {
-                status.value = Status.CLOSED
-                if (reconnectionStrategy.shouldReconnect()) {
-                    // reconnect ?
-                }
-                if (continuation.isActive) {
-                    continuation.resume(false)
-                }
+                status = Status.OPEN
+                sessionDeferred.complete(session)
+                onConnect()
+            } catch (e: Exception) {
+                onClose(Result.failure(e))
             }
 
         }
     }
 
-    suspend fun send(frame: Frame) {
+    suspend fun onConnect() {
+        withSession {
+            scope.launch {
+                sendChannel.consumeEach {
+                    send(it)
+                }
+            }
+            scope.launch {
+                for (frame in incoming)
+                    if (status == Status.OPEN)
+                        frames.emit(frame)
+                onClose(Result.success(Unit))
+            }
+        }
+    }
+
+
+    suspend fun onClose(closeResult: Result<Unit>) {
+        disconnectingMutex.withLock {
+            if (status == Status.CLOSED) return
+
+            status = Status.CLOSED
+
+            // not withSession, because we call connect and it can cause a deadlock
+            sessionDeferred.await().apply {
+                val closeReason = if (closeResult.isSuccess) closeReason.await() else null
+                if (false && reconnectionStrategy.shouldReconnect(closeResult, closeReason)) {
+                    reconnectionStrategy.wait()
+                    connect()
+                }
+            }
+        }
+    }
+
+    suspend fun sendFrame(frame: Frame) {
         sendChannel.send(frame)
     }
 
     suspend fun close(reason: CloseReason = CloseReason(CloseReason.Codes.NORMAL, "")) {
-        if (status.compareAndSet(Status.OPEN, Status.CLOSING)) {
-            closeChannel.send(reason)
-            closeChannel.close()
+        withSession {
+            status = Status.CLOSING
+            sendFrame(Close(reason))
         }
     }
 }
 
+suspend fun WebSocket.sendTextFrame(text: String) = sendFrame(Text(text))
 
+suspend fun WebSocket.onTextFrame(fn: suspend (String) -> Unit) = withSession {
+    scope.launch {
+        frames
+            .filter { it is Text }
+            .map { (it as Text).readText() }
+            .collect {
+                fn(it)
+            }
+    }
+}
