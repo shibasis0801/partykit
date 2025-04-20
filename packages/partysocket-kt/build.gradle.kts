@@ -1,50 +1,32 @@
 plugins {
-    kotlin("multiplatform") version "2.1.10"
-    kotlin("plugin.serialization") version "2.1.10"
-    id("org.jetbrains.kotlinx.atomicfu") version "0.27.0"
-    id("com.android.library") version "8.8.0"
-
+    kotlin("multiplatform") version "2.1.10" apply false
+    kotlin("android") version "2.1.10" apply false
+    kotlin("plugin.serialization") version "2.1.10" apply false
+    id("com.android.application") version "8.8.0" apply false
+    id("com.android.library") version "8.8.0" apply false
+    id("org.jetbrains.compose") version "1.8.0-alpha03" apply false
+    id("org.jetbrains.kotlin.plugin.compose") version "2.1.10" apply false
 }
 
-group = "io.partykit"
-version = "1.0.0"
-
-repositories {
-    google()
-    mavenCentral()
-}
-
-kotlin {
-    androidTarget()
-    jvm()
-    js(IR) {
-        browser()
-        nodejs()
-    }
-    iosX64()
-    iosArm64()
-    iosSimulatorArm64()
-
-    sourceSets {
-        commonMain.dependencies {
-            implementation("io.ktor:ktor-client-core:3.1.1")
-            implementation("io.ktor:ktor-serialization-kotlinx-json:3.1.1")
-            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.0")
-            implementation("org.jetbrains.kotlinx:kotlinx-serialization-core:1.8.0")
-//            implementation("co.touchlab:kermit:2.0.4")
-
-        }
-        jvmTest.dependencies {
-            implementation("io.ktor:ktor-client-okhttp:3.1.1")
-            implementation(kotlin("test"))
-        }
+buildscript {
+    repositories {
+        mavenLocal()
+        gradlePluginPortal()
+        google()
+        mavenCentral()
+        maven(url = "https://jitpack.io")
     }
 }
 
-android {
-    compileSdk = 34
-    namespace = "io.partykit.partysocket"
-    defaultConfig {
-        minSdk = 21
+allprojects {
+    group = "io.partykit"
+    repositories {
+        mavenLocal()
+        mavenCentral()
+        google()
+        maven(url = "https://www.jitpack.io")
+        maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
+        maven("https://oss.sonatype.org/content/repositories/snapshots")
+        maven("https://maven.pkg.jetbrains.space/kotlin/p/wasm/experimental")
     }
 }

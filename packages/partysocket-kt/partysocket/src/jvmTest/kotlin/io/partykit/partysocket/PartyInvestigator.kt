@@ -28,7 +28,7 @@ val httpClient = HttpClient(OkHttp) {
     install(HttpTimeout)
 }
 
-fun createPartySocket() = PartySocket(httpClient, PartySocketOptions("chat.bestbuds.ai", "my-new-room"))
+fun createPartySocket() = PartySocket(httpClient, PartySocketOptions("shibasis0801-chat-service.shibasispatnaik.workers.dev", "my-new-room"))
 
 class PartyInvestigator {
     @Test
@@ -121,3 +121,41 @@ class PartyInvestigator {
         assert(true)
     }
 }
+/*
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ */

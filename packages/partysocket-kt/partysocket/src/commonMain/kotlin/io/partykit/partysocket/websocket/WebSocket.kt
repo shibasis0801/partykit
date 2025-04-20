@@ -90,7 +90,7 @@ open class WebSocket(
         }
     }
 
-    suspend fun onConnect() {
+    protected suspend fun onConnect() {
         withSession {
             scope.launch {
                 sendChannel.consumeEach {
@@ -107,7 +107,7 @@ open class WebSocket(
     }
 
 
-    suspend fun onClose(closeResult: Result<Unit>) {
+    protected suspend fun onClose(closeResult: Result<Unit>) {
         disconnectingMutex.withLock {
             if (status == Status.CLOSED) return
 

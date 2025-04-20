@@ -6,4 +6,7 @@ pluginManagement {
     }
 }
 
-rootProject.name = "partysocket"
+rootProject.name = "partykit"
+include(":partysocket")
+include(":partysocket-compose")
+include(":partysocket-sample")
